@@ -1,8 +1,8 @@
-# make_bechdel_clean.py
+# clean_data.py
 # Builds bechdel_clean.csv for the dashboard.
 # Setup:  pip install pandas numpy requests
 #         set your TMDB key first:  export TMDB_API_KEY="..."   (Windows: setx TMDB_API_KEY "...")
-# Run:    python make_bechdel_clean.py
+# Run:    python clean_data.py
 
 import os
 import html
