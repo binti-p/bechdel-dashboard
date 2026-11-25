@@ -257,6 +257,7 @@ def make_view3(data, selected_genre):
 
 # PAGE LAYOUT
 app = Dash(__name__)
+server = app.server
 
 CARD = {"background": "white", "border": "1px solid #d9d9d9", "borderRadius": "8px",
         "padding": "12px 14px", "marginBottom": "14px"}
