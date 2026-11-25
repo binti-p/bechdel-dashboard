@@ -13,13 +13,16 @@ from dash.exceptions import PreventUpdate
 
 
 TITLE = "What types of films pass the Bechdel Test?"
-HINT = ()
+HINT = ("DRAG across the years in View 1 or 2 to filter every view (double-click to clear)  ·  "
+        "CLICK a genre in View 3 to filter Views 1 and 2  ·  hover any mark for details")
 VIEW1_LABEL = "Bechdel results over time"
 VIEW1_TITLE = "The passing share jumped from about a third to nearly half by the late 1990s, then stalled at 45–51%"
 VIEW2_LABEL = "Cost and return"
 VIEW2_TITLE = "Since the late-1990s, films that fail cost more to make, but earn back about the same per dollar"
 VIEW3_LABEL = "Pass rate by genre"
-VIEW3_TITLE = "Horror films pass more than twice as often as action or sci-fi films"
+VIEW3_TITLE = "Pass rate by genre"        # replaced by a headline worked out from the data (see genre_headline)
+VIEW1_FILTERED = "Bechdel results for the current selection"   # shown instead of the finding once a filter is on
+VIEW2_FILTERED = "Cost and return for the current selection"
 
 df = pd.read_csv("bechdel_clean.csv")
 df["budget_m"] = df["budget_2013"] / 1e6          # budget in millions of 2013 dollars
@@ -32,12 +35,17 @@ SUBTITLE = (f"{len(df):,} films, 1970–2013 · Bechdel results from FiveThirtyE
 # Bechdel levels, bottom of the stack first
 LEVELS = ["ok", "men", "notalk", "nowomen", "dubious"]
 NAMES = {"ok": "Passes", "men": "Men only", "notalk": "No talk", "nowomen": "<2 women", "dubious": "Dubious"}
-COLORS = {"ok": "#08306B", "men": "#2171B5", "notalk": "#6BAED6", "nowomen": "#C6DBEF", "dubious": "#707070"}
+# Blue ramp with evenly spaced lightness (L* about 16/36/56/76) so the levels differ in greyscale.
+# "Dubious" is hatched (texture instead of another shade).
+COLORS = {"ok": "#0A2947", "men": "#155693", "notalk": "#2C89E1", "nowomen": "#8FC0EF", "dubious": "#707070"}
+PASS_COLOR = "#0A2947"
+NOT_PASS_COLOR = "#E08214"      # orange: a different hue from every blue in View 1
 
 MIN_LINE = 5      # fewer films than this: draw nothing
 LOW_N = 15        # fewer films than this: hollow marker / star
 DIM = 0.3         # opacity of things that are not selected
 
+TRANSITION = dict(duration=400, easing="cubic-in-out")     # animated change on View 3
 SCALE = [[0, "#FFFFFF"], [0.2, "#DEEBF7"], [0.4, "#9ECAE1"], [0.6, "#4292C6"], [0.8, "#08519C"], [1, "#000814"]]
 
 
@@ -82,7 +90,7 @@ def empty_figure(message):
     fig = go.Figure()
     fig.add_annotation(text=message, xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
                        font=dict(size=14, color="#666"))
-    fig.update_layout(xaxis=dict(visible=False), yaxis=dict(visible=False), plot_bgcolor="white", height=300)
+    fig.update_layout(xaxis=dict(visible=False), yaxis=dict(visible=False), plot_bgcolor="white")
     return fig
 
 
@@ -95,10 +103,16 @@ def make_view1(data, selected_periods):
     pct = counts.div(n.replace(0, np.nan), axis=0) * 100
     pct.loc[n < MIN_LINE] = np.nan                       # too few films: no bar
 
+    # bars built on fewer than 15 films are narrower and faded
+    widths = [0.8 if n[p] >= LOW_N else 0.8 * max(n[p] / LOW_N, 0.3) for p in axis]
+    opacity = [1.0 if n[p] >= LOW_N else 0.45 for p in axis]
+
     fig = go.Figure()
     for level in LEVELS:
-        fig.add_bar(x=axis, y=pct[level], name=NAMES[level], marker_color=COLORS[level],
-                    marker_line=dict(color="white", width=1),
+        marker = dict(color=COLORS[level], opacity=opacity, line=dict(color="white", width=1))
+        if level == "dubious":                       # hatched, so it differs from the blues in greyscale
+            marker["pattern"] = dict(shape="/", fgcolor="#555555", bgcolor="white", size=6, solidity=0.35)
+        fig.add_bar(x=axis, y=pct[level], width=widths, name=NAMES[level], marker=marker,
                     customdata=counts[level],
                     hovertemplate="%{x}<br>" + NAMES[level] + ": %{y:.0f}% (%{customdata} films)<extra></extra>")
 
@@ -108,11 +122,11 @@ def make_view1(data, selected_periods):
         fig.add_annotation(x=p, y=103, text=f"n={n[p]}{star}", showarrow=False, yanchor="bottom",
                            font=dict(size=11, color="#555"))
 
-    fig.update_layout(barmode="stack", showlegend=True, height=380, plot_bgcolor="white",
-                      margin=dict(l=55, r=130, t=30, b=50),
+    fig.update_layout(barmode="stack", showlegend=True, plot_bgcolor="white",
+                      margin=dict(l=55, r=130, t=22, b=40),
                       legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.01,
                                   font=dict(size=11), bgcolor="rgba(0,0,0,0)",
-                                  traceorder="normal", itemclick=False, itemdoubleclick=False),
+                                  traceorder="reversed", itemclick=False, itemdoubleclick=False),   # same order as the stack
                       dragmode="select", selectdirection="h")      # drag = pick years only (no zoom)
     fig.update_yaxes(title="Share of films", ticksuffix="%", range=[0, 112], gridcolor="#eee", fixedrange=True)
     fig.update_xaxes(title="Release period (5 years)", categoryorder="array", categoryarray=axis, fixedrange=True)
@@ -131,9 +145,9 @@ def line_data(data, group, column, axis):
 
 def make_view2(data, context, selected_periods, show_context, full_data, full_context):
     axis = periods_axis(selected_periods)
-    style = {"Pass": ("#08306B", "circle"), "Not pass": ("#6BAED6", "triangle-up")}
+    style = {"Pass": (PASS_COLOR, "circle"), "Not pass": (NOT_PASS_COLOR, "triangle-up")}
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.16,
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.13,
                         subplot_titles=("What studios spend: median budget",
                                         "What they get back: median return per dollar"))
     # work out the median tables first (we need them to place the end labels)
@@ -166,8 +180,7 @@ def make_view2(data, context, selected_periods, show_context, full_data, full_co
 
             fig.add_trace(go.Scatter(
                 x=axis, y=s["median"], mode="lines+markers",
-                name=legend_names[group], legendgroup=group,
-                showlegend=(row == 1),      # one legend entry per group, from the top panel
+                showlegend=False,           # the legend is made from the three marker-only entries below
                 cliponaxis=False,
                 line=dict(color=color, width=3.5),
                 marker=dict(symbol=symbol, size=11,
@@ -175,6 +188,15 @@ def make_view2(data, context, selected_periods, show_context, full_data, full_co
                 customdata=s["n"],
                 hovertemplate=group + "<br>%{x}<br>Median: %{y:.1f}" + unit +
                               "<br>n = %{customdata:.0f} films<extra></extra>"), row=row, col=1)
+
+    # legend-only entries (marker only, always filled) so the shapes are easy to see
+    for group in ["Pass", "Not pass"]:
+        color, symbol = style[group]
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=legend_names[group],
+                                 marker=dict(symbol=symbol, size=12, color=color)))
+    # ... and one that explains the empty (hollow) markers
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="Empty marker =<br>not enough data<br>(under 15 films)",
+                             marker=dict(symbol="circle", size=11, color="white", line=dict(color=PASS_COLOR, width=2))))
 
     # break-even line (1x) in the bottom panel
     fig.add_trace(go.Scatter(x=axis, y=[1] * len(axis), mode="lines+text", showlegend=False,
@@ -193,8 +215,8 @@ def make_view2(data, context, selected_periods, show_context, full_data, full_co
     fig.update_yaxes(fixedrange=True)                      # y never zooms
     fig.update_xaxes(categoryorder="array", categoryarray=axis, fixedrange=True)
     fig.update_xaxes(title="Release period (5 years)", row=2, col=1)
-    fig.update_layout(height=560, plot_bgcolor="white", margin=dict(l=65, r=140, t=40, b=50),
-                      legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.01,
+    fig.update_layout(plot_bgcolor="white", margin=dict(l=65, r=150, t=28, b=40),
+                      legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.01, 
                                   font=dict(size=11), bgcolor="rgba(0,0,0,0)",
                                   itemclick=False, itemdoubleclick=False),
                       dragmode="select", selectdirection="h")      # drag = pick years only (no zoom)
@@ -202,11 +224,36 @@ def make_view2(data, context, selected_periods, show_context, full_data, full_co
 
 
 # VIEW 3: pass rate by genre (band = 95% interval, dot = pass rate)
+def name_list(names):
+    """['Horror'] -> 'Horror';  ['A', 'B'] -> 'A and B';  4+ names -> 'A, B and 2 others'."""
+    if len(names) <= 2:
+        return " and ".join(names)
+    if len(names) == 3:
+        return f"{names[0]}, {names[1]} and {names[2]}"
+    return f"{names[0]}, {names[1]} and {len(names) - 2} others"
+
+
+def genre_headline(g, overall):
+    """Headline that only claims what the 95% intervals support: a genre is 'clearly different'
+    only if its whole interval is on one side of the all-films line ('Other' is left out)."""
+    real = g[g["genre_group"] != "Other"]
+    above = list(real[real["lo"] > overall]["genre_group"])
+    below = list(real[real["hi"] < overall]["genre_group"])
+    if above and below:
+        return f"{name_list(above)} pass clearly more often than the all-films rate; {name_list(below)} clearly less"
+    if above:
+        return f"Only {name_list(above)} pass{'es' if len(above) == 1 else ''} clearly more often than the all-films rate"
+    if below:
+        return f"Only {name_list(below)} pass{'es' if len(below) == 1 else ''} clearly less often than the all-films rate"
+    return "No genre differs clearly from the all-films rate in this selection"
+
+
 def make_view3(data, selected_genre):
+    """Returns (figure, headline)."""
     g = data.groupby("genre_group").agg(n=("clean_test", "size"),
                                          k=("clean_test", lambda s: (s == "ok").sum())).reset_index()
     if len(g) == 0:
-        return empty_figure("No films match this selection")
+        return empty_figure("No films match this selection"), VIEW3_TITLE
     g["p"] = g["k"] / g["n"]
 
     # 95% Wilson interval
@@ -240,32 +287,43 @@ def make_view3(data, selected_genre):
                                   "<br>95% interval: %{customdata[2]:.0f}% to %{customdata[3]:.0f}%<extra></extra>")
     # the % printed to the right of each band
     for label, hi, p, o in zip(g["label"], g["hi"], g["p"], opacity):
-        fig.add_annotation(x=hi * 100, y=label, text=f"<b>{p:.0%}</b>", xanchor="left", xshift=8,
-                           showarrow=False, font=dict(size=13, color="#222"), opacity=o,
-                           bgcolor="white", borderpad=2)
+        fig.add_annotation(x=hi * 100, y=label, text=f"<b>{p:.0%}</b>", xanchor="left", xshift=14,
+                           showarrow=False, font=dict(size=13, color="#222"), opacity=o)
 
     # dashed line = pass rate of all the films shown
     fig.add_vline(x=overall * 100, line=dict(color="#222", width=1.5, dash="dash"))
     fig.add_annotation(x=overall * 100, y=1.0, yref="paper", yanchor="bottom", xanchor="center",
                        showarrow=False, text=f"All films: {overall:.0%}", font=dict(size=12, color="#222"))
 
-    fig.update_layout(height=110 + 36 * len(g), plot_bgcolor="white", margin=dict(l=140, r=20, t=40, b=60),
+    fig.update_layout(plot_bgcolor="white", transition=TRANSITION, margin=dict(l=140, r=20, t=40, b=60),
                       xaxis=dict(title="Share of films that pass", range=[0, 100], ticksuffix="%", gridcolor="#eee"),
                       yaxis=dict(autorange="reversed", categoryorder="array", categoryarray=list(g["label"])))
-    return fig
+    return fig, genre_headline(g, overall)
 
 
 # PAGE LAYOUT
 app = Dash(__name__)
+app.title = "Bechdel Dashboard"
 server = app.server
 
-CARD = {"background": "white", "border": "1px solid #d9d9d9", "borderRadius": "8px",
-        "padding": "12px 14px", "marginBottom": "14px"}
-LABEL = {"fontSize": "12px", "color": "#666", "textTransform": "uppercase", "letterSpacing": "0.05em"}
-HEADING = {"fontSize": "17px", "fontWeight": "600", "margin": "2px 0 8px 0", "color": "#08306B"}
-NOTE = {"fontSize": "12px", "color": "#666", "margin": "4px 0 0 0"}
+# animated "drag" pill shown on Views 1 and 2
+app.index_string = app.index_string.replace("</head>", """<style>
+body {margin: 0; background: #f3f5f8;}
+.drag-pill {background: #222; color: white; border-radius: 12px; padding: 2px 10px; font-size: 11px;
+            font-weight: 600; white-space: nowrap; float: right; text-transform: none; letter-spacing: 0;}
+.drag-pill .arrows {display: inline-block; animation: slide 1.2s ease-in-out 5;}
+@keyframes slide {0%, 100% {transform: translateX(-3px);} 50% {transform: translateX(3px);}}
+</style></head>""")
 
-# What the five Bechdel categories mean. Used in the glossary card above View 3.
+# Cards are flex columns so the chart inside stretches to fill whatever height the card gets
+CARD = {"background": "white", "border": "1px solid #d9d9d9", "borderRadius": "8px",
+        "padding": "10px 14px", "display": "flex", "flexDirection": "column", "minHeight": "0"}
+COLUMN = {"display": "flex", "flexDirection": "column", "gap": "12px", "minHeight": "0"}
+LABEL = {"fontSize": "12px", "color": "#666", "textTransform": "uppercase", "letterSpacing": "0.05em"}
+HEADING = {"fontSize": "15px", "fontWeight": "600", "margin": "2px 0 4px 0", "lineHeight": "1.25", "color": "#08306B"}
+NOTE = {"fontSize": "11px", "color": "#666", "margin": "4px 0 0 0", "lineHeight": "1.3"}
+
+# What the five Bechdel categories mean. Used in the 'About the Bechdel test' dropdown.
 GLOSSARY = [
     ("Passes",    "meets all three rules above"),
     ("Men only",  "has two or more named women, but they only talk about men"),
@@ -275,68 +333,82 @@ GLOSSARY = [
 ]
 
 
-def card(label, title, graph_id, note):
-    return html.Div(style=CARD, children=[
-        html.Div(label, style=LABEL),
-        html.H3(title, style=HEADING),
-        dcc.Graph(id=graph_id, config={"displayModeBar": False}),
+def card(label, title, graph_id, note, share, drag_pill=False):
+    """`share` = how much of the column height this card gets (a flex value)."""
+    pill = [html.Span([html.Span("↔", className="arrows"), " Drag across years to filter all views"],
+                      className="drag-pill")] if drag_pill else []
+    return html.Div(style={**CARD, "flex": share}, children=[
+        html.Div([html.Span(label)] + pill, style=LABEL),
+        html.H3(title, id=graph_id + "-title", style=HEADING),
+        html.Div(style={"flex": "1", "minHeight": "0"},
+                 children=dcc.Graph(id=graph_id, style={"height": "100%"},
+                                    config={"displayModeBar": False, "responsive": True})),
         html.P(note, style=NOTE),
     ])
 
 
 app.layout = html.Div(
-    style={"fontFamily": "Arial, sans-serif", "background": "#f3f5f8", "padding": "16px 22px"},
+    style={"fontFamily": "Arial, sans-serif", "background": "#f3f5f8", "padding": "12px 18px", "boxSizing": "border-box",
+           "height": "100vh", "minHeight": "720px", "display": "flex", "flexDirection": "column"},   # one screen tall
     children=[
         dcc.Store(id="state", data={"periods": [], "genre": None}),
 
-        html.H1(TITLE, style={"fontSize": "24px", "margin": "0", "color": "#08306B"}),
-        html.Div(SUBTITLE, style={"color": "#555", "margin": "4px 0 12px 0"}),
-
-        # filter strip: hint on top, reset button next to the "Showing..." line
-        html.Div(style={**CARD},
-                 children=[
-                     html.Div(HINT, style={"color": "#666", "fontSize": "13px", "marginBottom": "8px"}),
-                     html.Div(style={"display": "flex", "alignItems": "center", "gap": "12px"},
-                              children=[
-                                  html.Button("Reset", id="reset", n_clicks=0),
-                                  html.Div(id="status", style={"fontWeight": "600", "color": "#08306B"}),
-                              ]),
-                 ]),
+        html.H1(TITLE, style={"fontSize": "22px", "margin": "0", "color": "#08306B"}),
+        html.Div(SUBTITLE, style={"color": "#555", "margin": "2px 0 8px 0", "fontSize": "13px"}),
 
         # left column: View 1 on top of View 2 (same period axis); right column: View 3
-        html.Div(style={"display": "grid", "gridTemplateColumns": "1.5fr 1fr", "gap": "14px",
-                        "alignItems": "start"},
+        html.Div(style={"display": "grid", "gridTemplateColumns": "1.6fr 1fr", "gridTemplateRows": "minmax(0, 1fr)",
+                        "gap": "12px", "flex": "1", "minHeight": "0"},
                  children=[
-                     html.Div([
+                     html.Div(style=COLUMN, children=[
                          card(VIEW1_LABEL, VIEW1_TITLE, "view1",
-                              "Dubious counts as not passing. * = fewer than 15 films; bars are hidden under 5 films. "
-                              "Drag across periods to filter every view to those years; double-click to clear."),
+                              "Dubious (hatched) counts as not passing. Narrow, faded bar or * = fewer than 15 films; "
+                              "bars are hidden under 5 films. Drag across periods to filter every view to those years; "
+                              "double-click to clear.", share="2 1 0", drag_pill=True),
                          card(VIEW2_LABEL, VIEW2_TITLE, "view2",
                               "Medians per 5-year period. Hollow marker = fewer than 15 films; no line under 5. "
                               "Dubious counts as not passing. Gross is worldwide, not profit. All dollars are 2013 dollars. "
-                              "Faded lines = all genres (shown when a genre is selected)."),
+                              "Not pass = the four other levels, Dubious included. Empty marker = not enough data. "
+                              "Faded lines = all genres (shown when a genre is selected).", share="3 1 0", drag_pill=True),
                      ]),
-                     html.Div([
-                         # own card, sits above view 3
-                         html.Div(style=CARD, children=[
-                             html.Div("About the Bechdel test", style=LABEL),
-                             html.Div(style={"marginTop": "6px", "fontSize": "13px",
-                                             "color": "#2b2b2b", "lineHeight": "1.5"}, children=[
-                                 html.Div([
-                                     "A film passes if it has (1) at least two named women who (2) talk to "
-                                     "each other (3) about something besides a man. It's a rough proxy for "
-                                     "how prominent women are on screen, not a judgement of the film.",
-                                 ]),
-                                 html.Div(style={"marginTop": "8px"}, children=[html.B("Category meanings:")]),
-                                 html.Ul(style={"margin": "4px 0 0 18px", "padding": 0}, children=[
-                                     html.Li([html.B(name + ": "), desc]) for name, desc in GLOSSARY
+                     html.Div(style=COLUMN, children=[
+                         # controls card, sits above view 3: hint, Reset, status, and a dropdown with the Bechdel info
+                         html.Div(style={**CARD, "flex": "none", "position": "relative"}, children=[
+                             html.Div(HINT, style={"color": "#222", "fontSize": "13px", "fontWeight": "600",
+                                                   "marginBottom": "8px"}),
+                             html.Div(style={"display": "flex", "alignItems": "center", "gap": "12px"}, children=[
+                                 html.Button("Reset", id="reset", n_clicks=0),
+                                 html.Div(id="status", style={"fontWeight": "600", "color": "#08306B", "flex": "1"}),
+                                 # dropdown: opens as a floating box so the page does not jump
+                                 html.Details(style={"position": "relative"}, children=[
+                                     html.Summary("About the Bechdel test ▾",
+                                                  style={"cursor": "pointer", "fontWeight": "600", "color": "#08306B",
+                                                         "fontSize": "13px"}),
+                                     html.Div(style={"position": "absolute", "right": "0", "top": "26px", "width": "380px",
+                                                     "zIndex": "20", "background": "white", "border": "1px solid #999",
+                                                     "borderRadius": "6px", "padding": "10px 12px", "fontSize": "13px",
+                                                     "lineHeight": "1.45", "boxShadow": "0 4px 14px rgba(0,0,0,.25)"},
+                                              children=[
+                                         "A film passes if it has (1) at least two named women who (2) talk to each other "
+                                         "(3) about something besides a man. It's a rough proxy for how prominent women are "
+                                         "on screen, not a judgement of the film.",
+                                         html.Div(style={"marginTop": "8px"}, children=[html.B("Category meanings:")]),
+                                         html.Ul(style={"margin": "4px 0 0 18px", "padding": 0}, children=[
+                                             html.Li([html.B(name + ": "), desc]) for name, desc in GLOSSARY
+                                         ]),
+                                         html.Div(style={"marginTop": "8px"}, children=[
+                                             html.B("Data: "), "1,794 films, 1970–2013 (FiveThirtyEight). Budget and gross "
+                                             "are in 2013 dollars. Genres from TMDB: each film is counted once, under the "
+                                             "first genre TMDB lists."]),
+                                     ]),
                                  ]),
                              ]),
                          ]),
                          card(VIEW3_LABEL, VIEW3_TITLE, "view3",
                               "Dot and % = share that passes; band = 95% interval; darker shade = higher pass "
                               "rate (white = 0%, black = 100%). Hollow dot = fewer than 15 films. Genres under "
-                              "20 films are grouped as Other. Click a genre to filter Views 1 and 2."),
+                              "20 films are grouped as Other. Each film is counted once, under the first genre TMDB lists. "
+                              "Click a genre to filter Views 1 and 2.", share="1"),
                      ]),
                  ]),
     ])
@@ -379,6 +451,7 @@ def update_state(select1, select2, click3, reset_clicks, state):
 
 @app.callback(
     Output("view1", "figure"), Output("view2", "figure"), Output("view3", "figure"), Output("status", "children"),
+    Output("view1-title", "children"), Output("view2-title", "children"), Output("view3-title", "children"),
     Input("state", "data"),
 )
 def draw(state):
@@ -393,12 +466,17 @@ def draw(state):
     fig1 = make_view1(for_views_1_2, periods)
     fig2 = make_view2(for_views_1_2, context_1_2, periods, genre is not None,
                       full_data=filter_data(df, genre=genre), full_context=df)
-    fig3 = make_view3(for_view_3, genre)
+    fig3, title3 = make_view3(for_view_3, genre)
+
+    # the finding headlines in Views 1-2 describe all films, so swap them once a filter is on
+    filtered = bool(periods or genre)
+    title1 = VIEW1_FILTERED if filtered else VIEW1_TITLE
+    title2 = VIEW2_FILTERED if filtered else VIEW2_TITLE
 
     parts = [genre + " films" if genre else "all genres"]
     parts.append("years: " + ", ".join(sorted(periods)) if periods else "all years")
     status = "Showing: " + " · ".join(parts)
-    return fig1, fig2, fig3, status
+    return fig1, fig2, fig3, status, title1, title2, title3
 
 
 if __name__ == "__main__":
